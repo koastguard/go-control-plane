@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	k8s_errors "k8s.io/apimachinery/pkg/api/errors"
@@ -117,6 +118,11 @@ func (a *MeshConfReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 		return reconcile.Result{}, err
 	}
 
+	if !a.servicesMetaAreChanged(ctx, req.NamespacedName, data) {
+		log.Info("services meta are not changed, skip configmap update")
+		return reconcile.Result{}, nil
+	}
+
 	configMap := newConf(req.Namespace, string(data))
 
 	if err = a.Update(ctx, configMap); err != nil && k8s_errors.IsNotFound(err) {
@@ -129,4 +135,19 @@ func (a *MeshConfReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 
 	log.Info("updated config map")
 	return reconcile.Result{}, nil
+}
+
+// servicesMetaAreChanged is used for checking services with meshed=enabled label are changed or not
+func (a *MeshConfReconciler) servicesMetaAreChanged(ctx context.Context, name types.NamespacedName, newServicesMeta []byte) bool {
+	currentCM := &corev1.ConfigMap{}
+	if err := a.Get(ctx, name, currentCM, &client.GetOptions{}); err != nil {
+		return true
+	}
+
+	currentServicesMeta := currentCM.Data["config"]
+	if bytes.Equal([]byte(currentServicesMeta), newServicesMeta) {
+		return false
+	}
+
+	return false
 }
