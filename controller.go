@@ -4,27 +4,33 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	k8s_errors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sort"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
-
+	k8s_errors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-const ConfigMapName = "mesh-map"
-const enabled = "enabled"
-const MeshSelector = "meshed"
+const (
+	ConfigMapName = "mesh-map"
+	enabled       = "enabled"
+	MeshSelector  = "meshed"
+	MeshTimeout   = "mesh-timeout"
+
+	MaxConnectTimeout  = time.Duration(60 * time.Second)
+	MinConnectTimeout  = time.Duration(0 * time.Second)
+	TimeoutPlaceHolder = time.Duration(-1 * time.Second)
+)
 
 func newConf(ns string, cfg string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
@@ -83,9 +89,10 @@ type MeshConfReconciler struct {
 }
 
 type ServiceMeta struct {
-	Name string `json:"name"`
-	Ip   string `json:"ip"`
-	Port int32  `json:"port"`
+	Name           string `json:"name"`
+	Ip             string `json:"ip"`
+	Port           int32  `json:"port"`
+	ConnectTimeout string `json:"timeout"`
 }
 
 func (a *MeshConfReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
@@ -103,11 +110,10 @@ func (a *MeshConfReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 		if s.Spec.ClusterIP == "" || len(s.Spec.Ports) == 0 {
 			continue
 		}
-		srvs = append(srvs, ServiceMeta{
-			Name: s.Name,
-			Ip:   s.Spec.ClusterIP,
-			Port: s.Spec.Ports[0].Port,
-		})
+		svcMeta := newServiceMeta(&s)
+		if svcMeta != nil {
+			srvs = append(srvs, *svcMeta)
+		}
 	}
 	sort.SliceStable(srvs, func(i, j int) bool {
 		return srvs[i].Name < srvs[j].Name
@@ -150,4 +156,35 @@ func (a *MeshConfReconciler) servicesMetaAreChanged(ctx context.Context, name ty
 	}
 
 	return false
+}
+
+// newServiceMeta is used for creating ServiceMeta object based on service.
+// the range of mesh-timeout annotation is 0s~60s. if f the set value exceeds the range,
+// it will be forcibly set to the boundary value. by the way, if mesh-timeout annotation
+// is not configured, -1s is set as a holder.
+func newServiceMeta(svc *corev1.Service) *ServiceMeta {
+	if svc == nil || svc.Spec.ClusterIP == "" || len(svc.Spec.Ports) == 0 {
+		return nil
+	}
+
+	connectTimeout := TimeoutPlaceHolder
+	if len(svc.Annotations[MeshTimeout]) != 0 {
+		timeout, err := time.ParseDuration(svc.Annotations[MeshTimeout])
+		if err != nil {
+			// invalid mesh timeout, take as a un-configured service
+		} else if timeout > MaxConnectTimeout {
+			connectTimeout = MaxConnectTimeout
+		} else if timeout < MinConnectTimeout {
+			connectTimeout = MinConnectTimeout
+		} else {
+			connectTimeout = timeout
+		}
+	}
+
+	return &ServiceMeta{
+		Name:           svc.Name,
+		Ip:             svc.Spec.ClusterIP,
+		Port:           svc.Spec.Ports[0].Port,
+		ConnectTimeout: connectTimeout.String(),
+	}
 }

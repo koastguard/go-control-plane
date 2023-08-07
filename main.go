@@ -3,6 +3,16 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"sync"
+	"time"
+
+	"google.golang.org/protobuf/types/known/durationpb"
+	corev1 "k8s.io/api/core/v1"
+	k8s_types "k8s.io/apimachinery/pkg/types"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
+
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
@@ -11,13 +21,6 @@ import (
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
-	corev1 "k8s.io/api/core/v1"
-	k8s_types "k8s.io/apimachinery/pkg/types"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
-	"sync"
-	"time"
 )
 
 func main() {
@@ -103,7 +106,8 @@ func main() {
 							},
 						},
 					})
-					clusters = append(clusters, &clusterv3.Cluster{
+
+					cluster := &clusterv3.Cluster{
 						Name: s.Name,
 						LoadAssignment: &endpointv3.ClusterLoadAssignment{
 							ClusterName: s.Name,
@@ -130,7 +134,13 @@ func main() {
 								},
 							},
 						},
-					})
+					}
+					connectTimeout, err := time.ParseDuration(s.ConnectTimeout)
+					if err == nil && connectTimeout != TimeoutPlaceHolder {
+						cluster.ConnectTimeout = durationpb.New(connectTimeout)
+					}
+
+					clusters = append(clusters, cluster)
 				}
 
 				snap, err := cache.NewSnapshot(time.Now().String(), map[resource.Type][]types.Resource{
