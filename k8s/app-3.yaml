@@ -11,7 +11,7 @@ spec:
     - protocol: TCP
       appProtocol: http
       port: 9090
-      targetPort: 5080
+      targetPort: 8000
 ---
 apiVersion: apps/v1
 kind: Deployment
