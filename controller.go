@@ -155,7 +155,7 @@ func (a *MeshConfReconciler) servicesMetaAreChanged(ctx context.Context, name ty
 		return false
 	}
 
-	return false
+	return true
 }
 
 // newServiceMeta is used for creating ServiceMeta object based on service.
